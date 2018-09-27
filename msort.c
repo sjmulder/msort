@@ -13,7 +13,7 @@
 
 #define BUFSZ (64*1024)
 
-struct dataset {
+struct work {
 	char *data;	/* input and output (start) */
 	char *scratch;	/* for the first step, a copy of data */
 	size_t nlines;	/* number of lines to sort */
@@ -21,16 +21,9 @@ struct dataset {
 
 	uint32_t mask;	/* rough bitmap of the slice pos, e.g. 00110000 */
 	short depth;	/* 0 for top level, 1 for first recur, etc */
-};
 
-struct knobs {
 	size_t njobs;	/* job allowance */
 	size_t nthreads;/* thread allowance */
-};
-
-struct threadctx {
-	struct dataset *dataset;
-	struct knobs *knobs;
 };
 
 struct sfork {
@@ -42,7 +35,7 @@ struct sfork {
 
 struct sthread {
 	pthread_t tid;
-	struct threadctx ctx;
+	struct work *work;
 };
 
 /* utilities */
@@ -50,28 +43,24 @@ static void debugf(const char *fmt, ...);
 static ssize_t getfilesz(FILE *f);
 static char *readfile(FILE *f, size_t *lenp);
 
-static void ds_maskstr(char buf[33], uint32_t mask);
-static void ds_split(struct dataset *ds, struct dataset *left,
-    struct dataset *right);
+static void getmaskstr(char buf[33], uint32_t mask);
+static void splitwork(struct work *ds, struct work *left, struct work *right);
 
 /* the real deal */
-static void msort(struct dataset *ds, struct knobs *knobs);
+static void msort(struct work *work);
 static void merge(char *out, char *in1, char *in2, size_t n1, size_t n2);
 
-static void sfork_start(struct sfork *sf, struct dataset *ds,
-    struct knobs *knobs);
+static void sfork_start(struct sfork *sf, struct work *work);
 static void sfork_wait(struct sfork *sf);
 
-static void sthread_start(struct sthread *st, struct dataset *ds,
-    struct knobs *knobs);
+static void sthread_start(struct sthread *st, struct work *work);
 static void *sthread_entry(void *arg);
 static void sthread_wait(struct sthread *st);
 
 int
 main(int argc, char **argv)
 {
-	struct dataset ds;
-	struct knobs knobs;
+	struct work work;
 	size_t i;
 	char *s;
 
@@ -79,108 +68,102 @@ main(int argc, char **argv)
 	(void)argv;
 
 	debugf("reading input\n");
-	ds.data = readfile(stdin, &ds.datasz);
+	work.data = readfile(stdin, &work.datasz);
 
 	debugf("processing lines\n");
 	/* datasz-1 to ignore \n at end */
-	for (ds.nlines=1, i=0; i < ds.datasz-1; i++) {
-		if (ds.data[i] == '\n') {
-			ds.nlines++;
-			ds.data[i] = '\0';
+	for (work.nlines=1, i=0; i < work.datasz-1; i++) {
+		if (work.data[i] == '\n') {
+			work.nlines++;
+			work.data[i] = '\0';
 		}
 	}
-	if (ds.data[ds.datasz-1] == '\n')
-		ds.data[ds.datasz-1] = '\0';
+	if (work.data[work.datasz-1] == '\n')
+		work.data[work.datasz-1] = '\0';
 
-	debugf("countred %zu lines\n", ds.nlines);
+	debugf("countred %zu lines\n", work.nlines);
 	debugf("creating scratch buffer\n");
 
-	if (!(ds.scratch = malloc(ds.datasz)))
-		err(1, "failed to alloc %zu bytes", ds.datasz);
-	memcpy(ds.scratch, ds.data, ds.datasz);
+	if (!(work.scratch = malloc(work.datasz)))
+		err(1, "failed to alloc %zu bytes", work.datasz);
+	memcpy(work.scratch, work.data, work.datasz);
 
-	ds.mask = 0xFFFFFFFF;
-	ds.depth = 0;
-	knobs.njobs = 4;
-	knobs.nthreads = 4;
+	work.mask = 0xFFFFFFFF;
+	work.depth = 0;
+	work.njobs = 2;
+	work.nthreads = 2;
 
-	msort(&ds, &knobs);
+	msort(&work);
 
 	debugf("writing output\n");
-	for (i=0, s=ds.data; i < ds.nlines; i++, s += strlen(s)+1) 
+	for (i=0, s=work.data; i < work.nlines; i++, s += strlen(s)+1)
 		puts(s);
 
 	return 0;
 }
 
 static void
-msort(struct dataset *ds, struct knobs *knobs)
+msort(struct work *work)
 {
-	struct dataset left;
-	struct dataset right;
-	struct knobs lknobs;
-	struct knobs rknobs;
+	struct work left;
+	struct work right;
 	struct sfork sfork;
 	struct sthread sthread;
 	char maskstr[33];
 
-	if (ds->nlines <= 1)
+	if (work->nlines <= 1)
 		return;
 
-#if 0
-	debugf("  first line: '%s'\n", ds->data);
-#endif
-
 	/* split the dataset into two, swapping data and scratch */
-	ds_split(ds, &left, &right);
+	splitwork(work, &left, &right);
 
-	lknobs = *knobs;
-	rknobs = *knobs;
+	if (work->mask)
+		getmaskstr(maskstr, work->mask);
 
-	if (ds->mask)
-		ds_maskstr(maskstr, ds->mask);
-
-	if (knobs->njobs > 1) {
-		if (ds->mask)
+	if (work->njobs > 1) {
+		if (work->mask)
 			debugf("sort  %s [fork]\n", maskstr);
 
 		/* consume one job for fork, divide the rest */
-		lknobs.njobs = (knobs->njobs - 1) / 2;
-		rknobs.njobs = (knobs->njobs - 1) - lknobs.njobs;
+		left.njobs = (work->njobs - 1) / 2;
+		right.njobs = (work->njobs - 1) - left.njobs;
 
-		sfork_start(&sfork, &left, &lknobs);
-		msort(&right, &rknobs);
+		left.nthreads = work->nthreads;
+		right.nthreads = work->nthreads;
+
+		sfork_start(&sfork, &left);
+		msort(&right);
 		sfork_wait(&sfork);
 
-		if (ds->mask)
+		if (work->mask)
 			debugf("merge %s [from fork]\n", maskstr);
-	} else if (knobs->nthreads > 1) {
-		if (ds->mask)
+	} else if (work->nthreads > 1) {
+		if (work->mask)
 			debugf("sort  %s [thread]\n", maskstr);
 
 		/* consume one thread for fork, divide the rest */
-		lknobs.nthreads = (knobs->nthreads - 1) / 2;
-		rknobs.nthreads = (knobs->nthreads - 1) - lknobs.nthreads;
+		left.nthreads = (work->nthreads - 1) / 2;
+		right.nthreads = (work->nthreads - 1) - left.nthreads;
 
-		sthread_start(&sthread, &left, &lknobs);
-		msort(&right, &rknobs);
+		sthread_start(&sthread, &left);
+		msort(&right);
 		sthread_wait(&sthread);
 
-		if (ds->mask)
+		if (work->mask)
 			debugf("merge %s [from thread]\n", maskstr);
 	} else {
-		if (ds->mask)
+		if (work->mask)
 			debugf("sort  %s\n", maskstr);
 
-		msort(&left, &lknobs);
-		msort(&right, &rknobs);
+		msort(&left);
+		msort(&right);
 
-		if (ds->mask)
+		if (work->mask)
 			debugf("merge %s\n", maskstr);
 	}
 
 	/* remember: left and right's .data are our scratch */
-	merge(ds->data, left.data, right.data, left.nlines, right.nlines); 
+	merge(work->data, left.data, right.data, left.nlines, right.nlines);
 }
 
 static void
@@ -190,18 +173,12 @@ merge(char *out, char *in1, char *in2, size_t n1, size_t n2)
 
 	while (n1 || n2) {
 		if (n1 && (!n2 || strcmp(in1, in2) <= 0)) {
-#if 0
-			debugf("  - %s (%zu, %zu)\n", in1, n1-1, n2);
-#endif
 			len = strlen(in1);
 			memcpy(out, in1, len+1);
 			out += len+1;
 			in1 += len+1;
 			n1--;
 		} else {
-#if 0
-			debugf("  - %s (%zu, %zu)\n", in2, n1, n2-1);
-#endif
 			len = strlen(in2);
 			memcpy(out, in2, len+1);
 			out += len+1;
@@ -213,7 +190,7 @@ merge(char *out, char *in1, char *in2, size_t n1, size_t n2)
 
 
 static void
-sfork_start(struct sfork *sf, struct dataset *ds, struct knobs *knobs)
+sfork_start(struct sfork *sf, struct work *work)
 {
 	pid_t pid;
 	int fds[2];
@@ -232,11 +209,11 @@ sfork_start(struct sfork *sf, struct dataset *ds, struct knobs *knobs)
 		if (!(f = fdopen(fds[1], "w")))
 			err(1, "fdopen");
 
-		msort(ds, knobs);
+		msort(work);
 
-		debugf("  sending  %zu bytes\n", ds->datasz);
-		nwritten = fwrite(ds->data, 1, ds->datasz, f);
-		assert(nwritten == ds->datasz);
+		debugf("  sending  %zu bytes\n", work->datasz);
+		nwritten = fwrite(work->data, 1, work->datasz, f);
+		assert(nwritten == work->datasz);
 
 		fclose(f);
 		exit(0);
@@ -246,8 +223,8 @@ sfork_start(struct sfork *sf, struct dataset *ds, struct knobs *knobs)
 
 		sf->pid = pid;
 		sf->readfd = fds[0];
-		sf->dst = ds->data;
-		sf->dstsz = ds->datasz;
+		sf->dst = work->data;
+		sf->dstsz = work->datasz;
 		return;
 	}
 }
@@ -273,21 +250,18 @@ sfork_wait(struct sfork *sf)
 }
 
 static void
-sthread_start(struct sthread *st, struct dataset *ds, struct knobs *knobs)
+sthread_start(struct sthread *st, struct work *work)
 {
-	st->ctx.dataset = ds;
-	st->ctx.knobs = knobs;
-
-	if (pthread_create(&st->tid, NULL, sthread_entry, &st->ctx) == -1)
+	if (pthread_create(&st->tid, NULL, sthread_entry, work) == -1)
 		err(1, "pthread_create");
 }
 
 static void *
 sthread_entry(void *arg)
 {
-	struct threadctx *ctx = arg;	
+	struct work *work = arg;
 
-	msort(ctx->dataset, ctx->knobs);
+	msort(work);
 	return NULL;
 }
 
@@ -299,7 +273,7 @@ sthread_wait(struct sthread *st)
 }
 
 static void
-ds_maskstr(char buf[33], uint32_t mask)
+getmaskstr(char buf[33], uint32_t mask)
 {
 	int i;
 
@@ -310,19 +284,23 @@ ds_maskstr(char buf[33], uint32_t mask)
 }
 
 static void
-ds_split(struct dataset *ds, struct dataset *left, struct dataset *right)
+splitwork(struct work *work, struct work *left, struct work *right)
 {
 	size_t offset, line;
 
-	left->data = ds->scratch;
-	left->scratch = ds->data;
-	left->nlines = ds->nlines / 2;
-	left->depth = ds->depth + 1;
+	left->data = work->scratch;
+	left->scratch = work->data;
+	left->nlines = work->nlines / 2;
+	left->depth = work->depth + 1;
+	left->njobs = 0;
+	left->nthreads = 0;
 
-	right->data = ds->scratch;
-	right->scratch = ds->data;
-	right->nlines = ds->nlines - left->nlines;
-	right->depth = ds->depth + 1;
+	right->data = work->scratch;
+	right->scratch = work->data;
+	right->nlines = work->nlines - left->nlines;
+	right->depth = work->depth + 1;
+	right->njobs = 0;
+	right->nthreads = 0;
 
 	for (offset=0, line=0; line < left->nlines; line++)
 		offset += strlen(&left->data[offset]) + 1;
@@ -330,32 +308,25 @@ ds_split(struct dataset *ds, struct dataset *left, struct dataset *right)
 	left->datasz = offset;
 	right->data += offset;
 	right->scratch += offset;
-	right->datasz = ds->datasz - offset;
+	right->datasz = work->datasz - offset;
 
 	switch (left->depth) {
-		case 1: left->mask = ds->mask & 0xFFFF0000; break;
-		case 2: left->mask = ds->mask & 0xFF00FF00; break;
-		case 3: left->mask = ds->mask & 0xF0F0F0F0; break;
-		case 4: left->mask = ds->mask & 0xCCCCCCCC; break;
-		case 5: left->mask = ds->mask & 0xAAAAAAAA; break;
+		case 1: left->mask = work->mask & 0xFFFF0000; break;
+		case 2: left->mask = work->mask & 0xFF00FF00; break;
+		case 3: left->mask = work->mask & 0xF0F0F0F0; break;
+		case 4: left->mask = work->mask & 0xCCCCCCCC; break;
+		case 5: left->mask = work->mask & 0xAAAAAAAA; break;
 		default: left->mask = 0; break;
 	}
 
 	switch (right->depth) {
-		case 1: right->mask = ds->mask & 0x0000FFFF; break;
-		case 2: right->mask = ds->mask & 0x00FF00FF; break;
-		case 3: right->mask = ds->mask & 0x0F0F0F0F; break;
-		case 4: right->mask = ds->mask & 0x33333333; break;
-		case 5: right->mask = ds->mask & 0x55555555; break;
+		case 1: right->mask = work->mask & 0x0000FFFF; break;
+		case 2: right->mask = work->mask & 0x00FF00FF; break;
+		case 3: right->mask = work->mask & 0x0F0F0F0F; break;
+		case 4: right->mask = work->mask & 0x33333333; break;
+		case 5: right->mask = work->mask & 0x55555555; break;
 		default: right->mask = 0; break;
 	}
-
-#if 0
-	debugf("  split %zu+%zu(%zu) to %zu+%zu(%zu) and %zu+%zu(%zu)\n",
-	    ds->scratch, ds->datasz, ds->nlines,
-	    left->scratch, left->datasz, left->nlines,
-	    right->scratch, right->datasz, right->nlines);
-#endif
 }
 
 static void
