@@ -252,8 +252,10 @@ sfork_wait(struct sfork *sf)
 static void
 sthread_start(struct sthread *st, struct work *work)
 {
-	if (pthread_create(&st->tid, NULL, sthread_entry, work) == -1)
-		err(1, "pthread_create");
+	int errn;
+
+	if ((errn = pthread_create(&st->tid, NULL, sthread_entry, work)))
+		errc(1, errn, "pthread_create");
 }
 
 static void *
@@ -268,8 +270,10 @@ sthread_entry(void *arg)
 static void
 sthread_wait(struct sthread *st)
 {
-	if (pthread_join(st->tid, NULL) == -1)
-		err(1, "pthread_join");
+	int errn;
+
+	if ((errn = pthread_join(st->tid, NULL)))
+		errc(1, errn, "pthread_join");
 }
 
 static void
