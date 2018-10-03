@@ -13,16 +13,59 @@
 
 #define BUFSZ (64*1024)
 
-struct work {
-	char *data;	/* input and output (start) */
-	char *scratch;	/* for the first step, a copy of data */
-	size_t datasz;	/* of this slice */
+/*
+ * msort
+ *
+ * This program is a top down merge sort implementation for sorting the
+ * lines of a file lexographically:
+ *
+ *   msort <unsorted.txt >sorted.txt
+ *
+ * Refer to external documentation for more information about merge sort in
+ * general, but here are specifics regarding this implementation:
+ *
+ *  - The data representation is the original file (plus a terminating \0).
+ *    There is no line pointer table or such. This complicates the code but
+ *    removes a layer of indirection. (Embedded \0 characters break the
+ *    program.)
+ *
+ *  - Two methods of parallelism are implemented: pthreads and forking. (Both
+ *    are configured in the main function.) Since work is independent no
+ *    communication with other threads is required other than joining. Forks
+ *    pass results back through a named pipe.
+ *
+ *  - Merge sort practically requires using a second buffer for the sorting
+ *    steps. The roles of main and scratch buffer are swapped at each step of
+ *    recursion in such a way that the main buffer ends up sorted in the end.
+ *
+ * Written by Sijmen J. Mulder <ik@sjmulder.nl>, 2018
+ */
 
-	uint32_t mask;	/* rough bitmap of the slice pos, e.g. 00110000 */
-	short depth;	/* 0 for top level, 1 for first recur, etc */
+struct work {
+	/*
+	 * Buffer slices to work on for current step. As mentioned above,
+	 * both a main and scratch buffer are required for merge sort. Roles
+	 * are swapped at every step of recursion.
+	 *
+	 * Both data and scratch must be filled with with the unsorted data
+	 * initially.
+	 */
+	char *data;
+	char *scratch;
+	size_t datasz;
+
+	/*
+	 * 'mask' and 'depth' are used for debug output. The mask starts out
+	 * as all 1s, e.g. 111111. When the msort function divides the left
+	 * and right working sets, the masks become 1111000 and 0001111
+	 * respectively, and so on. This is printed to show progress
+	 * visually.
+	 */
+	uint32_t mask;
+	short depth;
 
 	size_t njobs;	/* job allowance */
-	size_t nthreads;/* thread allowance */
+	size_t nthreads;/* thread allowance (per job!) */
 };
 
 struct sfork {
@@ -35,6 +78,8 @@ struct sfork {
 struct sthread {
 	pthread_t tid;
 };
+
+/* proper function documentation found at point of definition */
 
 /* utilities */
 static ssize_t getfilesz(FILE *f);
@@ -93,6 +138,11 @@ main(int argc, char **argv)
 	return 0;
 }
 
+/*
+ * Sort work->data, leaving results in work->data. The work->scratch buffer
+ * is used internally but both data and scratch must contain the full
+ * unsorted buffer initially. See the struct work definition for field info.
+ */
 static void
 msort(struct work *work)
 {
@@ -118,6 +168,7 @@ msort(struct work *work)
 	right.scratch = work->data + left.datasz;
 	right.mask = maskright(work->mask, ++right.depth);
 
+	/* mask becomes 0 when the slice gets too small; don't bother then */
 	if (work->mask)
 		getmaskstr(maskstr, work->mask);
 
@@ -167,6 +218,10 @@ msort(struct work *work)
 	merge(work->data, left.data, right.data, left.datasz, right.datasz);
 }
 
+/*
+ * Merge two sorted buffers into a third sorted buffer. Both input buffers
+ * must exactly match line boundaries.
+ */
 static void
 merge(char *out, char *in1, char *in2, size_t sz1, size_t sz2)
 {
@@ -187,7 +242,11 @@ merge(char *out, char *in1, char *in2, size_t sz1, size_t sz2)
 	}
 }
 
-
+/*
+ * sfork_start() and sfork_wait() together behave as msort(), but
+ * asynchronously by using a child process to do the work. The child process
+ * communicates the results back to the parent by using a pipe.
+ */
 static void
 sfork_start(struct sfork *sf, struct work *work)
 {
@@ -228,6 +287,9 @@ sfork_start(struct sfork *sf, struct work *work)
 	}
 }
 
+/*
+ * Wait for the child process to complete and write its results into work->data.
+ */
 static void
 sfork_wait(struct sfork *sf)
 {
@@ -248,6 +310,11 @@ sfork_wait(struct sfork *sf)
 		errx(1, "child failed");
 }
 
+/*
+ * sthread_start() and sthread_wait() together behave as msort(), but
+ * asynchronously by using a thread to do the work. The thread modifies
+ * its work->data and work->scratch slices as it works.
+ */
 static void
 sthread_start(struct sthread *st, struct work *work)
 {
@@ -257,6 +324,9 @@ sthread_start(struct sthread *st, struct work *work)
 		errc(1, errn, "pthread_create");
 }
 
+/*
+ * Entry function for the thread, used only by sthread_start()
+ */
 static void *
 sthread_entry(void *arg)
 {
@@ -266,6 +336,10 @@ sthread_entry(void *arg)
 	return NULL;
 }
 
+/*
+ * Wait for the worker thread to finish. No further processing needs to be
+ * done since the thread updates the data in place.
+ */
 static void
 sthread_wait(struct sthread *st)
 {
@@ -275,6 +349,10 @@ sthread_wait(struct sthread *st)
 		errc(1, errn, "pthread_join");
 }
 
+/*
+ * Returns the length of the given file, or -1 if that's not possible. Used
+ * to optimise input file reading.
+ */
 static ssize_t
 getfilesz(FILE *f)
 {
@@ -293,6 +371,14 @@ getfilesz(FILE *f)
 	return (size_t)end;
 }
 
+/*
+ * Reads the entire file as a \0 terminated string. A single allocation and
+ * read call are used if the file size can be determined, otherwise the
+ * buffer is dynamically grown.
+ *
+ * The file size (excluding the terminating \0) are stored in lenp is given,
+ * although the buffer capacity may be greater.
+ */
 static char *
 readfile(FILE *f, size_t *lenp)
 {
@@ -331,6 +417,10 @@ readfile(FILE *f, size_t *lenp)
 	return buf;
 }
 
+/*
+ * Compare the first line (up to \n or \0) of both s1 and s2, otherwise
+ * following strcmp() semantics.
+ */
 static int
 linecmp(char *s1, char *s2)
 {
@@ -344,6 +434,12 @@ linecmp(char *s1, char *s2)
 	}
 }
 
+/*
+ * Append the first line (up to \0 or \n) of src to dst and a \n character to
+ * dst, returning the number of characters written.
+ *
+ * NO \0 characters is written to avoid writing outside of working set bounds.
+ */
 static size_t
 linecpy(char *dst, char *src)
 {
@@ -356,6 +452,14 @@ linecpy(char *dst, char *src)
 	return i;
 }
 
+/*
+ * Returns a pointer to the beginning of a line near the middle of the given
+ * string. Search direction for line breaks is forward first, backward
+ * second. If 's' itself is returned, there's only one line.
+ *
+ * This is much more efficient than counting the number of lines at startup
+ * and scanning all the way from the beginning of 's' for the n/2th line.
+ */
 static char *
 linesmid(char *s, size_t sz)
 {
@@ -376,6 +480,10 @@ linesmid(char *s, size_t sz)
 	return s;
 }
 
+/*
+ * Write a message to stderr. Exists so that it may be disabled at some
+ * point.
+ */
 static void
 debugf(const char *fmt, ...)
 {
@@ -390,6 +498,10 @@ debugf(const char *fmt, ...)
 	    (unsigned)pthread_self(), buf);
 }
 
+/*
+ * Returns a new mask based representing the LEFT working set of the given
+ * mask at the given depth. See the comment in struct work.
+ */
 static uint32_t
 maskleft(uint32_t mask, int depth)
 {
@@ -403,6 +515,10 @@ maskleft(uint32_t mask, int depth)
 	}
 }
 
+/*
+ * Returns a new mask based representing the RIGHT working set of the given
+ * mask at the given depth. See the comment in struct work.
+ */
 static uint32_t
 maskright(uint32_t mask, int depth)
 {
@@ -416,6 +532,9 @@ maskright(uint32_t mask, int depth)
 	}
 }
 
+/*
+ * Convert the given integer mask to a \0 terminated string.
+ */
 static void
 getmaskstr(char buf[33], uint32_t mask)
 {
