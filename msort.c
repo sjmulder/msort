@@ -37,13 +37,17 @@ struct sthread {
 };
 
 /* utilities */
-static void debugf(const char *fmt, ...);
-static ssize_t getfilesz(FILE *f);
-static char *readfile(FILE *f, size_t *lenp);
-static char *strsmid(char *strs, size_t sz);
-
 static void getmaskstr(char buf[33], uint32_t mask);
 static void splitwork(struct work *ds, struct work *left, struct work *right);
+
+static void debugf(const char *fmt, ...);
+
+static ssize_t getfilesz(FILE *f);
+static char *readfile(FILE *f, size_t *lenp);
+
+static int linecmp(char *s1, char *s2);
+static size_t linecpy(char *dst, char *src);
+static char *linesmid(char *s, size_t sz);
 
 /* the real deal */
 static void msort(struct work *work);
@@ -60,27 +64,15 @@ int
 main(int argc, char **argv)
 {
 	struct work work;
-	size_t nlines, i;
-	char *s;
 
 	(void)argc;
 	(void)argv;
 
 	debugf("reading input\n");
 	work.data = readfile(stdin, &work.datasz);
-
-	debugf("processing lines\n");
-	/* datasz-1 to ignore \n at end */
-	for (nlines=1, i=0; i < work.datasz-1; i++) {
-		if (work.data[i] == '\n') {
-			nlines++;
-			work.data[i] = '\0';
-		}
-	}
 	if (work.data[work.datasz-1] == '\n')
 		work.data[work.datasz-1] = '\0';
 
-	debugf("countred %zu lines\n", nlines);
 	debugf("creating scratch buffer\n");
 
 	if (!(work.scratch = malloc(work.datasz)))
@@ -95,8 +87,7 @@ main(int argc, char **argv)
 	msort(&work);
 
 	debugf("writing output\n");
-	for (i=0, s=work.data; i < nlines; i++, s += strlen(s)+1)
-		puts(s);
+	fwrite(work.data, work.datasz, 1, stdout);
 
 	return 0;
 }
@@ -175,18 +166,16 @@ merge(char *out, char *in1, char *in2, size_t sz1, size_t sz2)
 	size_t len;
 
 	while (sz1 || sz2) {
-		if (sz1 && (!sz2 || strcmp(in1, in2) <= 0)) {
-			len = strlen(in1);
-			memcpy(out, in1, len+1);
-			out += len+1;
-			in1 += len+1;
-			sz1 -= len+1;
+		if (sz1 && (!sz2 || linecmp(in1, in2) <= 0)) {
+			len = linecpy(out, in1);
+			out += len;
+			in1 += len;
+			sz1 -= len;
 		} else {
-			len = strlen(in2);
-			memcpy(out, in2, len+1);
-			out += len+1;
-			in2 += len+1;
-			sz2 -= len+1;
+			len = linecpy(out, in2);
+			out += len;
+			in2 += len;
+			sz2 -= len;
 		}
 	}
 }
@@ -295,7 +284,7 @@ splitwork(struct work *work, struct work *left, struct work *right)
 {
 	char *mid;
 
-	mid = strsmid(work->scratch, work->datasz);
+	mid = linesmid(work->scratch, work->datasz);
 
 	left->data = work->scratch;
 	left->scratch = work->data;
@@ -400,22 +389,47 @@ readfile(FILE *f, size_t *lenp)
 	return buf;
 }
 
+static int
+linecmp(char *s1, char *s2)
+{
+	for (; ; ++s1, ++s2) {
+		if (!s1 || *s1 == '\n')
+			return -1;
+		else if (!s2 || *s2 == '\n')
+			return 1;
+		else if (*s1 != *s2)
+			return *s1 - *s2;
+	}
+}
+
+static size_t
+linecpy(char *dst, char *src)
+{
+	size_t i;
+
+	for (i=0; src[i] && src[i] != '\n'; i++)
+		dst[i] = src[i];
+
+	dst[i++] = '\n';
+	return i;
+}
+
 static char *
-strsmid(char *strs, size_t sz)
+linesmid(char *s, size_t sz)
 {
 	char *p;
 
 	if (sz<2)
-		return strs;
+		return s;
 
 	/* try to find a string boundary from the middle forward */
-	if ((p = memchr(strs + sz/2, '\0', sz-(sz/2)-1)))
+	if ((p = memchr(s + sz/2, '\n', sz-(sz/2)-1)))
 		return p+1;
 
 	/* from the middle backward */
-	if ((p = memrchr(strs, '\0', sz/2)))
+	if ((p = memrchr(s, '\n', sz/2)))
 		return p+1;
 
 	/* nothing, so it's just a single string */
-	return strs;
+	return s;
 }
