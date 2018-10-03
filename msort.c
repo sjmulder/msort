@@ -16,7 +16,6 @@
 struct work {
 	char *data;	/* input and output (start) */
 	char *scratch;	/* for the first step, a copy of data */
-	size_t nlines;	/* number of lines to sort */
 	size_t datasz;	/* of this slice */
 
 	uint32_t mask;	/* rough bitmap of the slice pos, e.g. 00110000 */
@@ -35,20 +34,20 @@ struct sfork {
 
 struct sthread {
 	pthread_t tid;
-	struct work *work;
 };
 
 /* utilities */
 static void debugf(const char *fmt, ...);
 static ssize_t getfilesz(FILE *f);
 static char *readfile(FILE *f, size_t *lenp);
+static char *strsmid(char *strs, size_t sz);
 
 static void getmaskstr(char buf[33], uint32_t mask);
 static void splitwork(struct work *ds, struct work *left, struct work *right);
 
 /* the real deal */
 static void msort(struct work *work);
-static void merge(char *out, char *in1, char *in2, size_t n1, size_t n2);
+static void merge(char *out, char *in1, char *in2, size_t sz1, size_t sz2);
 
 static void sfork_start(struct sfork *sf, struct work *work);
 static void sfork_wait(struct sfork *sf);
@@ -61,7 +60,7 @@ int
 main(int argc, char **argv)
 {
 	struct work work;
-	size_t i;
+	size_t nlines, i;
 	char *s;
 
 	(void)argc;
@@ -72,16 +71,16 @@ main(int argc, char **argv)
 
 	debugf("processing lines\n");
 	/* datasz-1 to ignore \n at end */
-	for (work.nlines=1, i=0; i < work.datasz-1; i++) {
+	for (nlines=1, i=0; i < work.datasz-1; i++) {
 		if (work.data[i] == '\n') {
-			work.nlines++;
+			nlines++;
 			work.data[i] = '\0';
 		}
 	}
 	if (work.data[work.datasz-1] == '\n')
 		work.data[work.datasz-1] = '\0';
 
-	debugf("countred %zu lines\n", work.nlines);
+	debugf("countred %zu lines\n", nlines);
 	debugf("creating scratch buffer\n");
 
 	if (!(work.scratch = malloc(work.datasz)))
@@ -91,12 +90,12 @@ main(int argc, char **argv)
 	work.mask = 0xFFFFFFFF;
 	work.depth = 0;
 	work.njobs = 2;
-	work.nthreads = 2;
+	work.nthreads = 1;
 
 	msort(&work);
 
 	debugf("writing output\n");
-	for (i=0, s=work.data; i < work.nlines; i++, s += strlen(s)+1)
+	for (i=0, s=work.data; i < nlines; i++, s += strlen(s)+1)
 		puts(s);
 
 	return 0;
@@ -111,11 +110,15 @@ msort(struct work *work)
 	struct sthread sthread;
 	char maskstr[33];
 
-	if (work->nlines <= 1)
-		return;
-
 	/* split the dataset into two, swapping data and scratch */
 	splitwork(work, &left, &right);
+
+	/*
+	 * If no more data left or right after split it means there's only one
+	 * line and we are done.
+	 */
+	if (!left.datasz || !right.datasz)
+		return;
 
 	if (work->mask)
 		getmaskstr(maskstr, work->mask);
@@ -163,27 +166,27 @@ msort(struct work *work)
 	}
 
 	/* remember: left and right's .data are our scratch */
-	merge(work->data, left.data, right.data, left.nlines, right.nlines);
+	merge(work->data, left.data, right.data, left.datasz, right.datasz);
 }
 
 static void
-merge(char *out, char *in1, char *in2, size_t n1, size_t n2)
+merge(char *out, char *in1, char *in2, size_t sz1, size_t sz2)
 {
 	size_t len;
 
-	while (n1 || n2) {
-		if (n1 && (!n2 || strcmp(in1, in2) <= 0)) {
+	while (sz1 || sz2) {
+		if (sz1 && (!sz2 || strcmp(in1, in2) <= 0)) {
 			len = strlen(in1);
 			memcpy(out, in1, len+1);
 			out += len+1;
 			in1 += len+1;
-			n1--;
+			sz1 -= len+1;
 		} else {
 			len = strlen(in2);
 			memcpy(out, in2, len+1);
 			out += len+1;
 			in2 += len+1;
-			n2--;
+			sz2 -= len+1;
 		}
 	}
 }
@@ -290,29 +293,23 @@ getmaskstr(char buf[33], uint32_t mask)
 static void
 splitwork(struct work *work, struct work *left, struct work *right)
 {
-	size_t offset, line;
+	char *mid;
+
+	mid = strsmid(work->scratch, work->datasz);
 
 	left->data = work->scratch;
 	left->scratch = work->data;
-	left->nlines = work->nlines / 2;
+	left->datasz = mid - work->scratch;
 	left->depth = work->depth + 1;
 	left->njobs = 0;
 	left->nthreads = 0;
 
-	right->data = work->scratch;
-	right->scratch = work->data;
-	right->nlines = work->nlines - left->nlines;
+	right->data = mid;
+	right->scratch = work->data + (mid - work->scratch);
+	right->datasz = work->datasz - (mid - work->scratch);
 	right->depth = work->depth + 1;
 	right->njobs = 0;
 	right->nthreads = 0;
-
-	for (offset=0, line=0; line < left->nlines; line++)
-		offset += strlen(&left->data[offset]) + 1;
-
-	left->datasz = offset;
-	right->data += offset;
-	right->scratch += offset;
-	right->datasz = work->datasz - offset;
 
 	switch (left->depth) {
 		case 1: left->mask = work->mask & 0xFFFF0000; break;
@@ -401,4 +398,24 @@ readfile(FILE *f, size_t *lenp)
 	if (lenp)
 		*lenp = len;
 	return buf;
+}
+
+static char *
+strsmid(char *strs, size_t sz)
+{
+	char *p;
+
+	if (sz<2)
+		return strs;
+
+	/* try to find a string boundary from the middle forward */
+	if ((p = memchr(strs + sz/2, '\0', sz-(sz/2)-1)))
+		return p+1;
+
+	/* from the middle backward */
+	if ((p = memrchr(strs, '\0', sz/2)))
+		return p+1;
+
+	/* nothing, so it's just a single string */
+	return strs;
 }
