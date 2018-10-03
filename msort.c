@@ -37,17 +37,18 @@ struct sthread {
 };
 
 /* utilities */
-static void getmaskstr(char buf[33], uint32_t mask);
-static void splitwork(struct work *ds, struct work *left, struct work *right);
-
-static void debugf(const char *fmt, ...);
-
 static ssize_t getfilesz(FILE *f);
 static char *readfile(FILE *f, size_t *lenp);
 
 static int linecmp(char *s1, char *s2);
 static size_t linecpy(char *dst, char *src);
 static char *linesmid(char *s, size_t sz);
+
+/* debugging */
+static void debugf(const char *fmt, ...);
+static uint32_t maskleft(uint32_t mask, int depth);
+static uint32_t maskright(uint32_t mask, int depth);
+static void getmaskstr(char buf[33], uint32_t mask);
 
 /* the real deal */
 static void msort(struct work *work);
@@ -99,17 +100,23 @@ msort(struct work *work)
 	struct work right;
 	struct sfork sfork;
 	struct sthread sthread;
-	char maskstr[33];
+	char *mid, maskstr[33];
 
-	/* split the dataset into two, swapping data and scratch */
-	splitwork(work, &left, &right);
+	mid = linesmid(work->scratch, work->datasz);
+	if (mid == work->scratch)
+		return; /* just one line, we're done */
 
-	/*
-	 * If no more data left or right after split it means there's only one
-	 * line and we are done.
-	 */
-	if (!left.datasz || !right.datasz)
-		return;
+	left = *work;
+	left.data = work->scratch;
+	left.datasz = mid - work->scratch;
+	left.scratch = work->data;
+	left.mask = maskleft(work->mask, ++left.depth);
+
+	right = *work;
+	right.data = mid;
+	right.datasz = work->datasz - left.datasz;
+	right.scratch = work->data + left.datasz;
+	right.mask = maskright(work->mask, ++right.depth);
 
 	if (work->mask)
 		getmaskstr(maskstr, work->mask);
@@ -268,71 +275,6 @@ sthread_wait(struct sthread *st)
 		errc(1, errn, "pthread_join");
 }
 
-static void
-getmaskstr(char buf[33], uint32_t mask)
-{
-	int i;
-
-	for (i=0; i<32; i++)
-		buf[31-i] = ((mask >> i) & 1) ? '#' : '.';
-
-	buf[32] = '\0';
-}
-
-static void
-splitwork(struct work *work, struct work *left, struct work *right)
-{
-	char *mid;
-
-	mid = linesmid(work->scratch, work->datasz);
-
-	left->data = work->scratch;
-	left->scratch = work->data;
-	left->datasz = mid - work->scratch;
-	left->depth = work->depth + 1;
-	left->njobs = 0;
-	left->nthreads = 0;
-
-	right->data = mid;
-	right->scratch = work->data + (mid - work->scratch);
-	right->datasz = work->datasz - (mid - work->scratch);
-	right->depth = work->depth + 1;
-	right->njobs = 0;
-	right->nthreads = 0;
-
-	switch (left->depth) {
-		case 1: left->mask = work->mask & 0xFFFF0000; break;
-		case 2: left->mask = work->mask & 0xFF00FF00; break;
-		case 3: left->mask = work->mask & 0xF0F0F0F0; break;
-		case 4: left->mask = work->mask & 0xCCCCCCCC; break;
-		case 5: left->mask = work->mask & 0xAAAAAAAA; break;
-		default: left->mask = 0; break;
-	}
-
-	switch (right->depth) {
-		case 1: right->mask = work->mask & 0x0000FFFF; break;
-		case 2: right->mask = work->mask & 0x00FF00FF; break;
-		case 3: right->mask = work->mask & 0x0F0F0F0F; break;
-		case 4: right->mask = work->mask & 0x33333333; break;
-		case 5: right->mask = work->mask & 0x55555555; break;
-		default: right->mask = 0; break;
-	}
-}
-
-static void
-debugf(const char *fmt, ...)
-{
-	va_list ap;
-	char buf[512];
-
-	va_start(ap, fmt);
-	vsnprintf(buf, sizeof(buf), fmt, ap);
-	va_end(ap);
-
-	fprintf(stderr, "[%6u:%11u] %s", (unsigned)getpid(),
-	    (unsigned)pthread_self(), buf);
-}
-
 static ssize_t
 getfilesz(FILE *f)
 {
@@ -432,4 +374,55 @@ linesmid(char *s, size_t sz)
 
 	/* nothing, so it's just a single string */
 	return s;
+}
+
+static void
+debugf(const char *fmt, ...)
+{
+	va_list ap;
+	char buf[512];
+
+	va_start(ap, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+
+	fprintf(stderr, "[%6u:%11u] %s", (unsigned)getpid(),
+	    (unsigned)pthread_self(), buf);
+}
+
+static uint32_t
+maskleft(uint32_t mask, int depth)
+{
+	switch (depth) {
+		case 1: return mask & 0xFFFF0000;
+		case 2: return mask & 0xFF00FF00;
+		case 3: return mask & 0xF0F0F0F0;
+		case 4: return mask & 0xCCCCCCCC;
+		case 5: return mask & 0xAAAAAAAA;
+		default: return 0;
+	}
+}
+
+static uint32_t
+maskright(uint32_t mask, int depth)
+{
+	switch (depth) {
+		case 1: return mask & 0x0000FFFF;
+		case 2: return mask & 0x00FF00FF;
+		case 3: return mask & 0x0F0F0F0F;
+		case 4: return mask & 0x33333333;
+		case 5: return mask & 0x55555555;
+		default: return 0;
+	}
+}
+
+static void
+getmaskstr(char buf[33], uint32_t mask)
+{
+	int i;
+
+	for (i=0; i<32; i++)
+		buf[31-i] = ((mask >> i) & 1) ? '#' : '.';
+
+	buf[32] = '\0';
 }
