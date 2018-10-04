@@ -311,7 +311,7 @@ sthread_start(struct sthread *st, struct work *work)
 	int errn;
 
 	if ((errn = pthread_create(&st->tid, NULL, sthread_entry, work)))
-		errc(1, errn, "pthread_create");
+		errx(1, "pthread_create: %s", strerror(errn));
 }
 
 /*
@@ -336,7 +336,7 @@ sthread_wait(struct sthread *st)
 	int errn;
 
 	if ((errn = pthread_join(st->tid, NULL)))
-		errc(1, errn, "pthread_join");
+		errx(1, "pthread_join: %s", strerror(errn));
 }
 
 /*
@@ -420,7 +420,7 @@ linecmp(char *s1, char *s2)
 		else if (!s2 || *s2 == '\n')
 			return 1;
 		else if (*s1 != *s2)
-			return *s1 - *s2;
+			return (int)(unsigned char)*s1 - (unsigned char)*s2;
 	}
 }
 

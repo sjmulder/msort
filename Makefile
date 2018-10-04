@@ -1,6 +1,8 @@
 CFLAGS += -g
 CFLAGS += -O2
 CFLAGS += -Wall -Wextra -Werror
+# for glibc compat
+CFLAGS += -D_GNU_SOURCE
 
 LDFLAGS += -pthread
 
