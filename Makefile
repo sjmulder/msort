@@ -21,7 +21,7 @@ watch-test:
 watch-bench:
 	ls Makefile msort.c | entr -c make clean bench
 
-test.in: /usr/share/dict/words
+test.in: $(DICT)
 	sort -R <$(DICT) >small.in
 	cat small.in small.in small.in small.in small.in small.in \
 	    small.in small.in small.in small.in small.in small.in \
