@@ -2,7 +2,7 @@ msort
 =====
 
 This program is a top down merge sort implementation for sorting the
-lines of a file lexographically:
+lines of a file:
 
     msort <unsorted.txt >sorted.txt
 
