@@ -292,7 +292,7 @@ sfork_wait(struct sfork *sf)
 
 	nread = fread(sf->dst, 1, sf->dstsz, f);
 	debugf("  received %zu bytes\n", nread);
-	assert(nread = sf->dstsz);
+	assert(nread == sf->dstsz);
 
 	if (waitpid(sf->pid, &status, 0) == -1)
 		err(1, "waitpid");
