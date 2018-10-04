@@ -33,9 +33,9 @@
 
 struct work {
 	/*
-	 * Buffer slices to work on for current step. As mentioned above,
-	 * both a main and scratch buffer are required for merge sort. Roles
-	 * are swapped at every step of recursion.
+	 * Buffer slices to work on for current step. As mentioned in the
+	 * readme, both a main and scratch buffer are required for merge sort.
+	 * Roles are swapped at every step of recursion.
 	 *
 	 * Both data and scratch must be filled with with the unsorted data
 	 * initially.
@@ -366,7 +366,7 @@ getfilesz(FILE *f)
  * read call are used if the file size can be determined, otherwise the
  * buffer is dynamically grown.
  *
- * The file size (excluding the terminating \0) are stored in lenp is given,
+ * The file size (excluding the terminating \0) is stored in lenp if given,
  * although the buffer capacity may be greater.
  */
 static char *
@@ -425,10 +425,10 @@ linecmp(char *s1, char *s2)
 }
 
 /*
- * Append the first line (up to \0 or \n) of src to dst and a \n character to
- * dst, returning the number of characters written.
+ * Append the first line (up to \0 or \n) of src and a \n character to dst,
+ * returning the number of characters written.
  *
- * NO \0 characters is written to avoid writing outside of working set bounds.
+ * NO \0 character is written to avoid writing outside of working set bounds.
  */
 static size_t
 linecpy(char *dst, char *src)
@@ -444,8 +444,9 @@ linecpy(char *dst, char *src)
 
 /*
  * Returns a pointer to the beginning of a line near the middle of the given
- * string. Search direction for line breaks is forward first, backward
- * second. If 's' itself is returned, there's only one line.
+ * string. Search direction for line breaks is forward from the middle first,
+ * backward from the middle second. If 's' itself is returned, there's only
+ * one line.
  *
  * This is much more efficient than counting the number of lines at startup
  * and scanning all the way from the beginning of 's' for the n/2th line.
