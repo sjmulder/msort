@@ -30,6 +30,22 @@ general, but here are specifics regarding this implementation:
 More documentation can be found in the code.
 
 
+Running
+-------
+
+Tested on OpenBSD and Debian. Required packages on Debian, apart from the
+usual build tools: *wamerican*, *time*, and *entr*.
+
+    make test
+
+    # uses a larger file but does no verification
+    make bench
+
+    # watch targets with entr
+    make watch-test
+    make watch-bench
+
+
 Legal
 -----
 
