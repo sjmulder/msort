@@ -14,19 +14,17 @@ Refer to external documentation for more information about merge sort in
 general, but here are specifics regarding this implementation:
 
  - The data representation is the original file plus a terminating \n, hence
-   it can be considered a packed list of \n-terminated strings. Working on
-   this representation directly is more efficient than replacing every \n with
-   \0 as a preprocessing step and much more efficient than using a list of
-   pointers.
-
- - Two methods of parallelism are implemented: pthreads and forking. (Both
-   are configured in the main function.) Since work is independent no
-   communication with other threads is required other than joining. Forks
-   pass results back through a named pipe.
+   it can be considered a packed list of \n-terminated strings. This avoids
+   indirection (of a pointer list) and preprocessing.
 
  - Merge sort practically requires using a second buffer for the sorting
    steps. The roles of main and scratch buffer are swapped at each step of
    recursion in such a way that the main buffer ends up sorted in the end.
+
+ - Two methods of parallelism are implemented: pthreads and forking. (Both
+   are configured in the main function.) Since the main and scratch buffers
+   use shared memory, no communication is required other than waiting for
+   the thread or fork to complete.
 
 More documentation can be found in the code.
 

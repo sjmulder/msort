@@ -25,6 +25,7 @@
 
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/mman.h>
 #include <pthread.h>
 #include <getopt.h>
 #include <err.h>
@@ -58,22 +59,12 @@ struct work {
 	size_t nthreads;/* thread allowance (per job!) */
 };
 
-struct sfork {
-	pid_t pid;
-	int readfd;	/* fd to read output from */
-	char *dst;	/* where the output goes */
-	size_t dstsz;	/* amount of output to read */
-};
-
-struct sthread {
-	pthread_t tid;
-};
-
 /* proper function documentation found at point of definition */
 
 /* utilities */
 static ssize_t getfilesz(FILE *f);
-static char *readfile(FILE *f, size_t *lenp);
+static size_t copyfile(FILE *src, FILE *dst);
+static char *readfilesh(FILE *f, size_t *lenp);
 
 static int linecmp(char *s1, char *s2);
 static size_t linecpy(char *dst, char *src);
@@ -89,12 +80,12 @@ static void getmaskstr(char buf[33], uint32_t mask);
 static void msort(struct work *work);
 static void merge(char *out, char *in1, char *in2, size_t sz1, size_t sz2);
 
-static void sfork_start(struct sfork *sf, struct work *work);
-static void sfork_wait(struct sfork *sf);
+static void sfork_start(pid_t *pid, struct work *work);
+static void sfork_wait(pid_t pid);
 
-static void sthread_start(struct sthread *st, struct work *work);
+static void sthread_start(pthread_t *tid, struct work *work);
 static void *sthread_entry(void *arg);
-static void sthread_wait(struct sthread *st);
+static void sthread_wait(pthread_t tid);
 
 int
 main(int argc, char **argv)
@@ -104,16 +95,18 @@ main(int argc, char **argv)
 	(void)argc;
 	(void)argv;
 
-	debugf("reading input\n");
-	work.data = readfile(stdin, &work.datasz);
+	work.data = readfilesh(stdin, &work.datasz);
 	/* replace \0 with \n for use with line* functions below */
 	work.data[work.datasz] = '\n';
 
-	debugf("creating scratch buffer\n");
+	debugf("setting up scratch buffer\n");
 
-	if (!(work.scratch = malloc(work.datasz)))
-		err(1, "failed to alloc %zu bytes", work.datasz);
-	memcpy(work.scratch, work.data, work.datasz);
+	work.scratch = mmap(NULL, work.datasz+1, PROT_READ | PROT_WRITE,
+	    MAP_SHARED | MAP_ANON, -1, 0);
+	if (!work.scratch)
+		err(1, "cannot mmap %zu byte anonymous file", work.datasz+1);
+
+	memcpy(work.scratch, work.data, work.datasz+1);
 
 	work.mask = 0xFFFFFFFF;
 	work.depth = 0;
@@ -138,8 +131,8 @@ msort(struct work *work)
 {
 	struct work left;
 	struct work right;
-	struct sfork sfork;
-	struct sthread sthread;
+	pid_t pid;
+	pthread_t tid;
 	char *mid, maskstr[33];
 
 	mid = linesmid(work->scratch, work->datasz);
@@ -173,9 +166,9 @@ msort(struct work *work)
 		left.nthreads = work->nthreads;
 		right.nthreads = work->nthreads;
 
-		sfork_start(&sfork, &left);
+		sfork_start(&pid, &left);
 		msort(&right);
-		sfork_wait(&sfork);
+		sfork_wait(pid);
 
 		if (work->mask)
 			debugf("merge %s [from fork]\n", maskstr);
@@ -187,9 +180,9 @@ msort(struct work *work)
 		left.nthreads = (work->nthreads - 1) / 2;
 		right.nthreads = (work->nthreads - 1) - left.nthreads;
 
-		sthread_start(&sthread, &left);
+		sthread_start(&tid, &left);
 		msort(&right);
-		sthread_wait(&sthread);
+		sthread_wait(tid);
 
 		if (work->mask)
 			debugf("merge %s [from thread]\n", maskstr);
@@ -235,67 +228,30 @@ merge(char *out, char *in1, char *in2, size_t sz1, size_t sz2)
 /*
  * sfork_start() and sfork_wait() together behave as msort(), but
  * asynchronously by using a child process to do the work. The child process
- * communicates the results back to the parent by using a pipe.
+ * modifies work->data and work->scratch because those are shared memory.
  */
 static void
-sfork_start(struct sfork *sf, struct work *work)
+sfork_start(pid_t *pid, struct work *work)
 {
-	pid_t pid;
-	int fds[2];
-	FILE *f;
-	size_t nwritten;
-
-	if (pipe(fds) == -1)
-		err(1, "pipe");
-
-	switch ((pid = fork())) {
+	switch ((*pid = fork())) {
 	case -1:
 		err(1, "fork");
-
 	case 0:
-		close(fds[0]);
-		if (!(f = fdopen(fds[1], "w")))
-			err(1, "fdopen");
-
 		msort(work);
-
-		debugf("  sending  %zu bytes\n", work->datasz);
-		nwritten = fwrite(work->data, 1, work->datasz, f);
-		assert(nwritten == work->datasz);
-
-		fclose(f);
 		exit(0);
-
-	default:
-		close(fds[1]);
-
-		sf->pid = pid;
-		sf->readfd = fds[0];
-		sf->dst = work->data;
-		sf->dstsz = work->datasz;
-		return;
 	}
 }
 
 /*
- * Wait for the child process to complete and write its results into
- * work->data.
+ * Wait for the child process to finish. No further processing needs to be
+ * done since the process updates the data in place.
  */
 static void
-sfork_wait(struct sfork *sf)
+sfork_wait(pid_t pid)
 {
-	FILE *f;
-	size_t nread;
 	int status;
 
-	if (!(f = fdopen(sf->readfd, "r")))
-		err(1, "fdopen");
-
-	nread = fread(sf->dst, 1, sf->dstsz, f);
-	debugf("  received %zu bytes\n", nread);
-	assert(nread == sf->dstsz);
-
-	if (waitpid(sf->pid, &status, 0) == -1)
+	if (waitpid(pid, &status, 0) == -1)
 		err(1, "waitpid");
 	if (status)
 		errx(1, "child failed");
@@ -307,11 +263,11 @@ sfork_wait(struct sfork *sf)
  * its work->data and work->scratch slices as it works.
  */
 static void
-sthread_start(struct sthread *st, struct work *work)
+sthread_start(pthread_t *tid, struct work *work)
 {
 	int errn;
 
-	if ((errn = pthread_create(&st->tid, NULL, sthread_entry, work)))
+	if ((errn = pthread_create(tid, NULL, sthread_entry, work)))
 		errx(1, "pthread_create: %s", strerror(errn));
 }
 
@@ -332,11 +288,11 @@ sthread_entry(void *arg)
  * done since the thread updates the data in place.
  */
 static void
-sthread_wait(struct sthread *st)
+sthread_wait(pthread_t tid)
 {
 	int errn;
 
-	if ((errn = pthread_join(st->tid, NULL)))
+	if ((errn = pthread_join(tid, NULL)))
 		errx(1, "pthread_join: %s", strerror(errn));
 }
 
@@ -363,49 +319,77 @@ getfilesz(FILE *f)
 }
 
 /*
- * Reads the entire file as a \0 terminated string. A single allocation and
- * read call are used if the file size can be determined, otherwise the
- * buffer is dynamically grown.
- *
- * The file size (excluding the terminating \0) is stored in lenp if given,
- * although the buffer capacity may be greater.
+ * Write the rest of src to dst.
  */
-static char *
-readfile(FILE *f, size_t *lenp)
+static size_t
+copyfile(FILE *src, FILE *dst)
 {
-	ssize_t filesz;
-	size_t len=0, bufsz=0, nread;
-	char *buf=NULL;
+	char buf[BUFSZ];
+	size_t sz=0, n;
 
-	if ((filesz = getfilesz(f)) != -1) {
-		debugf("file is %zd bytes\n", filesz);
-
-		if (!(buf = malloc(filesz+1)))
-			err(1, "cannot malloc %zd bytes", filesz+1);
-
-		len = fread(buf, 1, filesz, f);
-	} else {
-		while (1) {
-			bufsz += BUFSZ;
-			if (!(buf = realloc(buf, bufsz)))
-				err(1, "cannot realloc %zu bytes", bufsz);
-
-			nread = fread(buf+len, 1, bufsz-len, f);
-			debugf("read %zu bytes\n", nread);
-			len += nread;
-			if (nread < bufsz-len)
-				break;
-		}
-
-		/* we always end up with room for trailing \0 */
+	while ((n = fread(buf, 1, BUFSZ, src))) {
+		if (fwrite(buf, 1, n, dst) != n)
+			err(1, "fwrite");
+		sz += n;
 	}
 
-	debugf("read total of %zu bytes\n", len);
+	if (ferror(src))
+		err(1, "fread");
 
-	buf[len] = '\0';
+	return sz;
+}
+
+/*
+ * Reads the entire file as a \0 terminated string in shared read/write
+ * memory. Data is first copied to a temporary file if the file size cannot
+ * be determined.
+ *
+ * The file size (excluding the terminating \0) is stored in lenp if given.
+ */
+static char *
+readfilesh(FILE *f, size_t *lenp)
+{
+	FILE *tmp;
+	ssize_t len;
+	char *data;
+
+	if ((len = getfilesz(f)) == -1) {
+		/* unknown file size, copy to temp file first */
+
+		debugf("writing input stream to temporary file\n");
+
+		if (!(tmp = tmpfile()))
+			err(1, "tmpfile");
+
+		len = copyfile(f, tmp);
+		fputc('\0', tmp);	/* terminating \0 */
+		fflush(tmp);		/* flush libc's buffers before mmap */
+
+		data = mmap(NULL, len+1, PROT_READ | PROT_WRITE, MAP_SHARED,
+		    fileno(tmp), 0);
+		if (!data)
+			err(1, "cannot mmap %zu byte temporary file", len+1);
+
+		debugf("read %zd bytes\n", len);
+	} else {
+		/* known file size, copy into anonymous mmap */
+
+		debugf("reading %zd byte input into shared memory\n", len);
+
+		data = mmap(NULL, len+1, PROT_READ | PROT_WRITE, MAP_SHARED |
+		    MAP_ANON, -1, 0);
+		if (!data)
+			err(1, "cannot mmap %zd byte anonymous file", len+1);
+
+		if (!fread(data, len, 1, f))
+			err(1, "fread");
+
+		data[len] = '\0';
+	}
+
 	if (lenp)
-		*lenp = len;
-	return buf;
+		*lenp = (size_t)len;
+	return data;
 }
 
 /*
