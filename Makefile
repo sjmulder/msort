@@ -15,12 +15,6 @@ test: msort test.in test.expect
 bench: msort large.in
 	time ./msort <large.in >/dev/null
 
-watch-test:
-	ls Makefile msort.c | entr -c make clean test
-
-watch-bench:
-	ls Makefile msort.c | entr -c make clean bench
-
 test.in: $(DICT)
 	sort -R <$(DICT) >small.in
 	cat small.in small.in small.in small.in small.in small.in \
@@ -44,4 +38,4 @@ clean:
 distclean: clean
 	rm -f *.in *.expect
 
-.PHONY: all test bench watch-test watch-bench clean distclean
+.PHONY: all test bench clean distclean

@@ -32,16 +32,12 @@ Running
 -------
 
 Tested on OpenBSD and Debian. Required packages on Debian, apart from the
-usual build tools: *wamerican*, *time*, and *entr*.
+usual build tools: *wamerican* and *time*.
 
     make test
 
     # uses a larger file but does no verification
     make bench
-
-    # watch targets with entr
-    make watch-test
-    make watch-bench
 
 
 Legal
