@@ -47,7 +47,7 @@ struct work {
 	/*
 	 * 'mask' and 'depth' are used for debug output. The mask starts out
 	 * as all 1s, e.g. 111111. When the msort function divides the left
-	 * and right working sets, the masks become 1111000 and 0001111
+	 * and right working sets, the masks become 11110000 and 00001111
 	 * respectively, and so on. This is printed to show progress
 	 * visually.
 	 */
@@ -183,7 +183,7 @@ msort(struct work *work)
 		if (work->mask)
 			debugf("sort  %s [thread]\n", maskstr);
 
-		/* consume one thread for fork, divide the rest */
+		/* consume one thread, divide the rest */
 		left.nthreads = (work->nthreads - 1) / 2;
 		right.nthreads = (work->nthreads - 1) - left.nthreads;
 
@@ -278,7 +278,8 @@ sfork_start(struct sfork *sf, struct work *work)
 }
 
 /*
- * Wait for the child process to complete and write its results into work->data.
+ * Wait for the child process to complete and write its results into
+ * work->data.
  */
 static void
 sfork_wait(struct sfork *sf)
