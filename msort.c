@@ -106,8 +106,8 @@ main(int argc, char **argv)
 
 	debugf("reading input\n");
 	work.data = readfile(stdin, &work.datasz);
-	if (work.data[work.datasz-1] == '\n')
-		work.data[work.datasz-1] = '\0';
+	/* replace \0 with \n for use with line* functions below */
+	work.data[work.datasz] = '\n';
 
 	debugf("creating scratch buffer\n");
 
@@ -408,16 +408,15 @@ readfile(FILE *f, size_t *lenp)
 }
 
 /*
- * Compare the first line (up to \n or \0) of both s1 and s2, otherwise
- * following strcmp() semantics.
+ * Compare \n-terminated strings, otherwise following strcmp() semantics.
  */
 static int
 linecmp(char *s1, char *s2)
 {
 	for (; ; ++s1, ++s2) {
-		if (!s1 || *s1 == '\n')
+		if (*s1 == '\n')
 			return -1;
-		else if (!s2 || *s2 == '\n')
+		else if (*s2 == '\n')
 			return 1;
 		else if (*s1 != *s2)
 			return (int)(unsigned char)*s1 - (unsigned char)*s2;
@@ -425,17 +424,15 @@ linecmp(char *s1, char *s2)
 }
 
 /*
- * Append the first line (up to \0 or \n) of src and a \n character to dst,
- * returning the number of characters written.
- *
- * NO \0 character is written to avoid writing outside of working set bounds.
+ * Copy a \n-terminated string from src into dst, returning the number of
+ * characters written.
  */
 static size_t
 linecpy(char *dst, char *src)
 {
 	size_t i;
 
-	for (i=0; src[i] && src[i] != '\n'; i++)
+	for (i=0; src[i] != '\n'; i++)
 		dst[i] = src[i];
 
 	dst[i++] = '\n';
