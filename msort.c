@@ -26,7 +26,6 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/mman.h>
-#include <pthread.h>
 #include <err.h>
 
 #define BUFSZ (64*1024)
@@ -54,8 +53,7 @@ struct work {
 	uint32_t mask;
 	short depth;
 
-	size_t njobs;	/* job allowance */
-	size_t nthreads;/* thread allowance (per job!) */
+	size_t njobs; /* job allowance */
 };
 
 /* proper function documentation found at point of definition */
@@ -78,13 +76,8 @@ static void getmaskstr(char buf[33], uint32_t mask);
 /* the real deal */
 static void msort(struct work *work);
 static void merge(char *out, char *in1, char *in2, size_t sz1, size_t sz2);
-
 static void sfork_start(pid_t *pid, struct work *work);
 static void sfork_wait(pid_t pid);
-
-static void sthread_start(pthread_t *tid, struct work *work);
-static void *sthread_entry(void *arg);
-static void sthread_wait(pthread_t tid);
 
 int
 main(int argc, char **argv)
@@ -110,7 +103,6 @@ main(int argc, char **argv)
 	work.mask = 0xFFFFFFFF;
 	work.depth = 0;
 	work.njobs = 2;
-	work.nthreads = 1;
 
 	msort(&work);
 
@@ -131,7 +123,6 @@ msort(struct work *work)
 	struct work left;
 	struct work right;
 	pid_t pid;
-	pthread_t tid;
 	char *mid, maskstr[33];
 
 	mid = linesmid(work->scratch, work->datasz);
@@ -162,29 +153,12 @@ msort(struct work *work)
 		left.njobs = (work->njobs - 1) / 2;
 		right.njobs = (work->njobs - 1) - left.njobs;
 
-		left.nthreads = work->nthreads;
-		right.nthreads = work->nthreads;
-
 		sfork_start(&pid, &left);
 		msort(&right);
 		sfork_wait(pid);
 
 		if (work->mask)
 			debugf("merge %s [from fork]\n", maskstr);
-	} else if (work->nthreads > 1) {
-		if (work->mask)
-			debugf("sort  %s [thread]\n", maskstr);
-
-		/* consume one thread, divide the rest */
-		left.nthreads = (work->nthreads - 1) / 2;
-		right.nthreads = (work->nthreads - 1) - left.nthreads;
-
-		sthread_start(&tid, &left);
-		msort(&right);
-		sthread_wait(tid);
-
-		if (work->mask)
-			debugf("merge %s [from thread]\n", maskstr);
 	} else {
 		if (work->mask)
 			debugf("sort  %s\n", maskstr);
@@ -254,45 +228,6 @@ sfork_wait(pid_t pid)
 		err(1, "waitpid");
 	if (status)
 		errx(1, "child failed");
-}
-
-/*
- * sthread_start() and sthread_wait() together behave as msort(), but
- * asynchronously by using a thread to do the work. The thread modifies
- * its work->data and work->scratch slices as it works.
- */
-static void
-sthread_start(pthread_t *tid, struct work *work)
-{
-	int errn;
-
-	if ((errn = pthread_create(tid, NULL, sthread_entry, work)))
-		errx(1, "pthread_create: %s", strerror(errn));
-}
-
-/*
- * Entry function for the thread, used only by sthread_start()
- */
-static void *
-sthread_entry(void *arg)
-{
-	struct work *work = arg;
-
-	msort(work);
-	return NULL;
-}
-
-/*
- * Wait for the worker thread to finish. No further processing needs to be
- * done since the thread updates the data in place.
- */
-static void
-sthread_wait(pthread_t tid)
-{
-	int errn;
-
-	if ((errn = pthread_join(tid, NULL)))
-		errx(1, "pthread_join: %s", strerror(errn));
 }
 
 /*
@@ -466,8 +401,7 @@ debugf(const char *fmt, ...)
 	vsnprintf(buf, sizeof(buf), fmt, ap);
 	va_end(ap);
 
-	fprintf(stderr, "[%6u:%11u] %s", (unsigned)getpid(),
-	    (unsigned)pthread_self(), buf);
+	fprintf(stderr, "[%6u] %s", (unsigned)getpid(), buf);
 }
 
 /*

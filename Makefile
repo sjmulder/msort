@@ -4,8 +4,6 @@ CFLAGS += -Wall -Wextra -Werror
 # for glibc compat
 CFLAGS += -D_GNU_SOURCE
 
-LDFLAGS += -pthread
-
 DICT = /usr/share/dict/words
 
 all: msort

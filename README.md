@@ -21,10 +21,9 @@ general, but here are specifics regarding this implementation:
    steps. The roles of main and scratch buffer are swapped at each step of
    recursion in such a way that the main buffer ends up sorted in the end.
 
- - Two methods of parallelism are implemented: pthreads and forking. (Both
-   are configured in the main function.) Since the main and scratch buffers
-   use shared memory, no communication is required other than waiting for
-   the thread or fork to complete.
+ - Parallelism is implemented with forks, configured in the main function.
+   Because the main and scratch buffers use shared memory, no communication
+   is required other than waiting for the fork to complete.
 
 More documentation can be found in the code.
 
