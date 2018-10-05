@@ -27,7 +27,6 @@
 #include <sys/wait.h>
 #include <sys/mman.h>
 #include <pthread.h>
-#include <getopt.h>
 #include <err.h>
 
 #define BUFSZ (64*1024)
