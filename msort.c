@@ -116,6 +116,8 @@ main(int argc, char **argv)
  * Sort work->data, leaving results in work->data. The work->scratch buffer
  * is used internally but both data and scratch must contain the full
  * unsorted buffer initially. See the struct work definition for field info.
+ *
+ * The work slice must exactly match line boundaries.
  */
 static void
 msort(struct work *work)
@@ -125,9 +127,16 @@ msort(struct work *work)
 	pid_t pid;
 	char *mid, maskstr[33];
 
+	assert(work->data[work->datasz-1] == '\n');
+	assert(work->scratch[work->datasz-1] == '\n');
+
 	mid = linesmid(work->scratch, work->datasz);
 	if (mid == work->scratch)
 		return; /* just one line, we're done */
+
+	assert(mid >= work->scratch);
+	assert(mid < work->scratch + work->datasz);
+	assert(*(mid-1) == '\n');
 
 	left = *work;
 	left.data = work->scratch;
@@ -182,6 +191,9 @@ static void
 merge(char *out, char *in1, char *in2, size_t sz1, size_t sz2)
 {
 	size_t len;
+
+	assert(in1[sz1-1] == '\n');
+	assert(in2[sz2-1] == '\n');
 
 	while (sz1 || sz2) {
 		if (sz1 && (!sz2 || linecmp(in1, in2) <= 0)) {
@@ -320,6 +332,8 @@ readfilesh(FILE *f, size_t *lenp)
 
 		data[len] = '\0';
 	}
+
+	assert(data[len] == '\0');
 
 	if (lenp)
 		*lenp = (size_t)len;
