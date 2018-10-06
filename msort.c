@@ -380,25 +380,28 @@ linecpy(char *dst, char *src)
  *
  * This is much more efficient than counting the number of lines at startup
  * and scanning all the way from the beginning of 's' for the n/2th line.
+ *
+ * Slice mutch exactly match line boundaries.
  */
 static char *
 linesmid(char *s, size_t sz)
 {
-	char *p;
+	char *lf;
 
-	if (sz<2)
-		return s;
+	assert(sz > 0);
+	assert(s[sz-1] == '\n');
 
-	/* try to find a string boundary from the middle forward */
-	if ((p = memchr(s + sz/2, '\n', sz-(sz/2)-1)))
-		return p+1;
+	/* search forwards */
+	for (lf = s + sz/2; *lf != '\n'; lf++)
+		;
+	if (lf+1 < s+sz)
+		return lf+1;
 
-	/* from the middle backward */
-	if ((p = memrchr(s, '\n', sz/2)))
-		return p+1;
-
-	/* nothing, so it's just a single string */
-	return s;
+	/* backwards */
+	for (lf = s + sz/2-1; *lf != '\n'; lf--)
+		if (lf <= s)
+			return s; /* not found */
+	return lf+1;
 }
 
 /*
