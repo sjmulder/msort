@@ -405,12 +405,14 @@ linesmid(char *s, size_t sz)
 }
 
 /*
- * Write a message to stderr. Exists so that it may be disabled at some
- * point.
+ * Write a message to stderr. No-op if NDEBUG is defined.
  */
 static void
 debugf(const char *fmt, ...)
 {
+#ifdef NDEBUG
+	(void)fmt;
+#else
 	va_list ap;
 	char buf[512];
 
@@ -419,6 +421,7 @@ debugf(const char *fmt, ...)
 	va_end(ap);
 
 	fprintf(stderr, "[%6u] %s", (unsigned)getpid(), buf);
+#endif
 }
 
 /*
