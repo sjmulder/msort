@@ -39,6 +39,8 @@ usual build tools: *wamerican* and *time*.
     # uses a larger file but does no verification
     make bench
 
+Enable `-DNDEBUG` in the Makefile to disable assertions and debug output.
+
 
 Legal
 -----
