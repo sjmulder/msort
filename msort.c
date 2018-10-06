@@ -198,7 +198,8 @@ merge(char *out, char *left, size_t leftsz, char *right, size_t rightsz)
 			*out++ = left[i];
 
 		/* note special check for \n, our end of string character */
-		if (left[i] == '\n' || left[i] < right[i]) {
+		if (left[i] == '\n' ||
+		    (unsigned char)left[i] < (unsigned char)right[i]) {
 			while ((*out++ = left[i++]) != '\n')
 				;
 			left += i;
