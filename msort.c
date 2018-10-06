@@ -62,9 +62,6 @@ struct work {
 static ssize_t getfilesz(FILE *f);
 static size_t copyfile(FILE *src, FILE *dst);
 static char *readfilesh(FILE *f, size_t *lenp);
-
-static int linecmp(char *s1, char *s2);
-static size_t linecpy(char *dst, char *src);
 static char *linesmid(char *s, size_t sz);
 
 /* debugging */
@@ -75,7 +72,8 @@ static void getmaskstr(char buf[33], uint32_t mask);
 
 /* the real deal */
 static void msort(struct work *work);
-static void merge(char *out, char *in1, char *in2, size_t sz1, size_t sz2);
+static void merge(char *out, char *left, size_t leftsz, char *right,
+    size_t rightsz);
 static void sfork_start(pid_t *pid, struct work *work);
 static void sfork_wait(pid_t pid);
 
@@ -88,7 +86,7 @@ main(int argc, char **argv)
 	(void)argv;
 
 	work.data = readfilesh(stdin, &work.datasz);
-	/* replace \0 with \n for use with line* functions below */
+	/* replace \0 with \n because that's our string separator */
 	work.data[work.datasz] = '\n';
 
 	debugf("setting up scratch buffer\n");
@@ -180,7 +178,7 @@ msort(struct work *work)
 	}
 
 	/* remember: left and right's .data are our scratch */
-	merge(work->data, left.data, right.data, left.datasz, right.datasz);
+	merge(work->data, left.data, left.datasz, right.data, right.datasz);
 }
 
 /*
@@ -188,26 +186,35 @@ msort(struct work *work)
  * must exactly match line boundaries.
  */
 static void
-merge(char *out, char *in1, char *in2, size_t sz1, size_t sz2)
+merge(char *out, char *left, size_t leftsz, char *right, size_t rightsz)
 {
-	size_t len;
+	size_t i;
 
-	assert(in1[sz1-1] == '\n');
-	assert(in2[sz2-1] == '\n');
+	while (leftsz && rightsz) {
+		assert(left[leftsz-1] == '\n');
+		assert(right[rightsz-1] == '\n');
 
-	while (sz1 || sz2) {
-		if (sz1 && (!sz2 || linecmp(in1, in2) <= 0)) {
-			len = linecpy(out, in1);
-			out += len;
-			in1 += len;
-			sz1 -= len;
+		for (i=0; left[i] != '\n' && left[i] == right[i]; i++)
+			*out++ = left[i];
+
+		/* note special check for \n, our end of string character */
+		if (left[i] == '\n' || left[i] < right[i]) {
+			while ((*out++ = left[i++]) != '\n')
+				;
+			left += i;
+			leftsz -= i;
 		} else {
-			len = linecpy(out, in2);
-			out += len;
-			in2 += len;
-			sz2 -= len;
+			while ((*out++ = right[i++]) != '\n')
+				;
+			right += i;
+			rightsz -= i;
 		}
 	}
+
+	if (leftsz)
+		memcpy(out, left, leftsz);
+	if (rightsz)
+		memcpy(out+leftsz, right, rightsz);
 }
 
 /*
@@ -338,38 +345,6 @@ readfilesh(FILE *f, size_t *lenp)
 	if (lenp)
 		*lenp = (size_t)len;
 	return data;
-}
-
-/*
- * Compare \n-terminated strings, otherwise following strcmp() semantics.
- */
-static int
-linecmp(char *s1, char *s2)
-{
-	for (; ; ++s1, ++s2) {
-		if (*s1 == '\n')
-			return -1;
-		else if (*s2 == '\n')
-			return 1;
-		else if (*s1 != *s2)
-			return (int)(unsigned char)*s1 - (unsigned char)*s2;
-	}
-}
-
-/*
- * Copy a \n-terminated string from src into dst, returning the number of
- * characters written.
- */
-static size_t
-linecpy(char *dst, char *src)
-{
-	size_t i;
-
-	for (i=0; src[i] != '\n'; i++)
-		dst[i] = src[i];
-
-	dst[i++] = '\n';
-	return i;
 }
 
 /*
