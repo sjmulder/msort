@@ -106,7 +106,7 @@ main(int argc, char **argv)
 
 	work.mask = 0xFFFFFFFF;
 	work.depth = 0;
-	work.njobs = 2;
+	work.njobs = 4;
 
 	msort(&work);
 
