@@ -31,8 +31,8 @@ More documentation can be found in the code.
 Running
 -------
 
-Tested on OpenBSD and Debian. Required packages on Debian, apart from the
-usual build tools: *wamerican* and *time*.
+Tested on OpenBSD, macOS (requires Xcode Command Line Tools) and Debian
+(requires build tools, a dictionary, and *time*).
 
     make test
 
