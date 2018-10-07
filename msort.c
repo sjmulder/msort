@@ -29,6 +29,7 @@
 #include <err.h>
 
 #define BUFSZ (64*1024)
+#define MINFORKSZ (1*1024*1024)
 
 struct work {
 	/*
@@ -158,7 +159,7 @@ msort(struct work *work)
 	if (work->mask)
 		getmaskstr(maskstr, work->mask);
 
-	if (work->njobs > 1) {
+	if (work->datasz >= MINFORKSZ && work->njobs > 1) {
 		if (work->mask)
 			debugf("sort  %s [fork]\n", maskstr);
 
