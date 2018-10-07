@@ -381,10 +381,11 @@ linesmid(char *s, size_t sz)
 		return lf+1;
 
 	/* backwards */
-	for (lf = s + sz/2-1; *lf != '\n'; lf--)
-		if (lf <= s)
-			return s; /* not found */
-	return lf+1;
+	for (lf = s + sz/2-1; lf >= s; lf--)
+		if (*lf == '\n')
+			return lf+1;
+
+	return s;
 }
 
 /*
