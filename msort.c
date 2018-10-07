@@ -342,7 +342,7 @@ readfilesh(FILE *f, size_t *lenp)
 		if (!data)
 			err(1, "cannot mmap %zd byte anonymous file", len+1);
 
-		if (!fread(data, len, 1, f))
+		if (len && !fread(data, len, 1, f))
 			err(1, "fread");
 
 		data[len] = '\0';
