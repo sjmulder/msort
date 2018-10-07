@@ -162,9 +162,9 @@ msort(struct work *work)
 		if (work->mask)
 			debugf("sort  %s [fork]\n", maskstr);
 
-		/* consume one job for fork, divide the rest */
-		left.njobs = (work->njobs - 1) / 2;
-		right.njobs = (work->njobs - 1) - left.njobs;
+		/* divide the jobs */
+		left.njobs = work->njobs / 2;
+		right.njobs = work->njobs - left.njobs;
 
 		sfork_start(&pid, &left);
 		msort(&right);
