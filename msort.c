@@ -86,17 +86,23 @@ main(int argc, char **argv)
 	(void)argv;
 
 	work.data = readfilesh(stdin, &work.datasz);
-	/* replace \0 with \n because that's our string separator */
-	work.data[work.datasz] = '\n';
+	if (!work.datasz) {
+		debugf("empty file\n");
+		return 0;
+	}
+
+	/* \n-terminate the dataset if needed, overwriting the \0 */
+	if (work.data[work.datasz-1] != '\n')
+		work.data[work.datasz++] = '\n';
 
 	debugf("setting up scratch buffer\n");
 
-	work.scratch = mmap(NULL, work.datasz+1, PROT_READ | PROT_WRITE,
+	work.scratch = mmap(NULL, work.datasz, PROT_READ | PROT_WRITE,
 	    MAP_SHARED | MAP_ANON, -1, 0);
 	if (!work.scratch)
 		err(1, "cannot mmap %zu byte anonymous file", work.datasz+1);
 
-	memcpy(work.scratch, work.data, work.datasz+1);
+	memcpy(work.scratch, work.data, work.datasz);
 
 	work.mask = 0xFFFFFFFF;
 	work.depth = 0;
