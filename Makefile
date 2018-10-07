@@ -25,7 +25,7 @@ test.in: $(DICT)
 	rm small.in
 
 test.expect: test.in
-	sort <test.in >test.expect
+	LC_ALL=C sort <test.in >test.expect
 
 large.in: test.in
 	cat test.in test.in test.in test.in test.in test.in test.in test.in \
