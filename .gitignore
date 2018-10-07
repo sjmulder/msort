@@ -1,4 +1,4 @@
 msort
-*.in
-*.out
-*.expect
+tests/words.in
+tests/words.expect
+tests/bench.in
