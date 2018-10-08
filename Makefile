@@ -31,7 +31,9 @@ tests/words.expect: tests/words.in
 
 tests/bench.in: tests/words.in
 	rm -f tests/bench.in
-	for n in `seq 200`; do cat tests/words.in >>tests/bench.in; done
+	for n in `seq 200 2>/dev/null || jot 200`; do \
+		cat tests/words.in >>tests/bench.in;  \
+	done
 
 clean:
 	rm -f msort
